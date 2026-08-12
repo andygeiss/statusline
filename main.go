@@ -39,14 +39,13 @@ install/uninstall flags:
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// Render blocks on stdin, which never arrives when the tool is run by
-	// hand. Unregister on the first signal so a second Ctrl-C terminates.
-	go func() { <-ctx.Done(); stop() }()
 	err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 	switch {
 	case err == nil:
 	case errors.Is(err, errUsage):
 		os.Exit(2) // message already printed where the error was detected
+	case errors.Is(err, context.Canceled):
+		os.Exit(1) // interrupted by Ctrl-C/SIGTERM; nothing useful to print
 	default:
 		fmt.Fprintf(os.Stderr, "statusline: %v\n", err)
 		os.Exit(1)
@@ -55,7 +54,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return runRender(stdin, stdout)
+		return runRender(ctx, stdin, stdout)
 	}
 	switch args[0] {
 	case "install":
@@ -78,10 +77,21 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 // deliberately carries ANSI colors — the consumer is Claude Code's terminal
 // UI, which renders them (deviation from the baseline's no-ANSI rule,
 // recorded in the README).
-func runRender(stdin io.Reader, stdout io.Writer) error {
+func runRender(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	// The stdin read is the one place the tool blocks (indefinitely, when
+	// run by hand without a pipe), so it is the one place that must honor
+	// ctx: the first Ctrl-C/SIGTERM exits instead of being swallowed. The
+	// decode goroutine stops when the process exits right after.
 	var in render.Input
-	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
-		return fmt.Errorf("decoding status JSON from stdin: %w", err)
+	decoded := make(chan error, 1)
+	go func() { decoded <- json.NewDecoder(stdin).Decode(&in) }()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-decoded:
+		if err != nil {
+			return fmt.Errorf("decoding status JSON from stdin: %w", err)
+		}
 	}
 	opts := render.Options{Home: homeDir()}
 	if dir := in.Workspace.CurrentDir; dir != "" {
@@ -106,6 +116,10 @@ func runInstall(args []string, stderr io.Writer) error {
 		}
 		return errUsage
 	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "install: unexpected argument %q (use -claude-dir)\n", fs.Arg(0))
+		return errUsage
+	}
 	if err := settings.Install(*claudeDir, *force); err != nil {
 		return err
 	}
@@ -121,6 +135,10 @@ func runUninstall(args []string, stderr io.Writer) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+		return errUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "uninstall: unexpected argument %q (use -claude-dir)\n", fs.Arg(0))
 		return errUsage
 	}
 	removed, err := settings.Uninstall(*claudeDir)

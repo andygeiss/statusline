@@ -4,8 +4,12 @@ package render
 
 import (
 	"fmt"
+	"math"
+	"path/filepath"
 	"strings"
-	"unicode/utf8"
+	"unicode"
+
+	"golang.org/x/text/width"
 )
 
 // Input mirrors the statusline JSON contract
@@ -25,9 +29,8 @@ type Input struct {
 		Name string `json:"name"`
 	} `json:"agent"`
 	Cost struct {
-		TotalCostUSD      float64 `json:"total_cost_usd"`
-		TotalLinesAdded   int     `json:"total_lines_added"`
-		TotalLinesRemoved int     `json:"total_lines_removed"`
+		TotalLinesAdded   int `json:"total_lines_added"`
+		TotalLinesRemoved int `json:"total_lines_removed"`
 	} `json:"cost"`
 	// UsedPercentage is a pointer: the docs allow null early in a session
 	// and right after /compact.
@@ -66,20 +69,56 @@ const (
 )
 
 // segment is one already-colored piece of the line. width is the visible
-// rune count — ANSI codes make len(out) useless for fitting.
+// terminal-column count — ANSI codes make len(out) useless for fitting.
 type segment struct {
 	out      string
 	width    int
 	priority int // 0 is always kept; higher numbers drop first when narrow
 }
 
-// seg builds the common single-color segment.
+// seg builds the common single-color segment. plain carries external input
+// (paths, model/branch/agent names): a control rune there would break the
+// one-line stdout contract or inject ANSI codes, so each becomes a space.
 func seg(plain, color string, priority int) segment {
+	plain = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, plain)
 	return segment{
 		out:      color + plain + reset,
-		width:    utf8.RuneCountInString(plain),
+		width:    displayWidth(plain),
 		priority: priority,
 	}
+}
+
+// displayWidth reports the terminal columns s occupies. Combining marks and
+// format controls take no cell (macOS sends NFD paths, whose accents arrive
+// as separate runes); East Asian wide and fullwidth runes take two, per the
+// Unicode table in x/text/width; everything else takes one. Cluster-level
+// width (ZWJ emoji sequences) is out of scope — those overcount, which only
+// makes the drop logic slightly conservative.
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		switch {
+		case unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf):
+		case isWide(r):
+			w += 2
+		default:
+			w++
+		}
+	}
+	return w
+}
+
+func isWide(r rune) bool {
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return true
+	}
+	return false
 }
 
 // Line renders the status line. Segments whose data is absent are skipped;
@@ -103,17 +142,14 @@ func Line(in Input, opts Options) string {
 	if s := rateSegment(in.RateLimits.FiveHour, in.RateLimits.SevenDay); s != nil {
 		segs = append(segs, *s)
 	}
-	if in.Cost.TotalCostUSD > 0 {
-		segs = append(segs, seg(fmt.Sprintf("$%.2f", in.Cost.TotalCostUSD), green, 4))
-	}
 	if s := linesSegment(in.Cost.TotalLinesAdded, in.Cost.TotalLinesRemoved); s != nil {
 		segs = append(segs, *s)
 	}
 	if in.Agent.Name != "" {
-		segs = append(segs, seg(in.Agent.Name, dim, 6))
+		segs = append(segs, seg(in.Agent.Name, dim, 5))
 	}
 	if s := in.OutputStyle.Name; s != "" && s != "default" {
-		segs = append(segs, seg(s, dim, 6))
+		segs = append(segs, seg(s, dim, 5))
 	}
 
 	segs = fit(segs, opts.Width)
@@ -126,40 +162,46 @@ func Line(in Input, opts Options) string {
 }
 
 // shortDir abbreviates home to ~ and long paths to …/parent/base, keeping
-// the line stable in deeply nested directories.
+// the line stable in deeply nested directories. Paths use the target OS's
+// separator — the release ships Windows binaries too.
 func shortDir(dir, home string) string {
 	if dir == "" {
 		return ""
 	}
+	sep := string(filepath.Separator)
 	if home != "" {
 		if dir == home {
 			return "~"
 		}
-		if rest, ok := strings.CutPrefix(dir, home+"/"); ok {
-			dir = "~/" + rest
+		if rest, ok := strings.CutPrefix(dir, home+sep); ok {
+			dir = "~" + sep + rest
 		}
 	}
-	const maxRunes = 40
-	if utf8.RuneCountInString(dir) <= maxRunes {
+	const maxColumns = 40
+	if displayWidth(dir) <= maxColumns {
 		return dir
 	}
-	parts := strings.Split(dir, "/")
+	parts := strings.Split(dir, sep)
 	if len(parts) <= 2 {
 		return dir
 	}
-	return "…/" + strings.Join(parts[len(parts)-2:], "/")
+	return "…" + sep + strings.Join(parts[len(parts)-2:], sep)
 }
 
 // contextSegment shows context-window usage as a five-block gauge plus the
-// exact percentage, green → yellow → red as the window fills.
+// rounded percentage, green → yellow → red as the window fills. Bar, number,
+// and color all derive from the same rounded value so they can never
+// disagree (99.6% must not read "100%" next to a non-full bar, and 84.6%
+// must not read "85%" in anything but the 85-band color).
 func contextSegment(pct float64) segment {
 	pct = min(max(pct, 0), 100)
-	filled := int(pct / 20)
+	shown := int(math.Round(pct))
+	filled := shown / 20
 	if pct > 0 && filled == 0 {
 		filled = 1
 	}
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", 5-filled)
-	return seg(fmt.Sprintf("%s %.0f%%", bar, pct), thresholdColor(pct), 1)
+	return seg(fmt.Sprintf("%s %d%%", bar, shown), thresholdColor(float64(shown)), 1)
 }
 
 // rateSegment shows the subscription windows, each colored by its own usage.
@@ -170,8 +212,10 @@ func rateSegment(fiveHour, sevenDay *RateWindow) *segment {
 		if w == nil {
 			return
 		}
-		text := fmt.Sprintf("%s %.0f%%", label, w.UsedPercentage)
-		out = append(out, thresholdColor(w.UsedPercentage)+text+reset)
+		// Round once and derive text and color from it, like contextSegment.
+		shown := math.Round(w.UsedPercentage)
+		text := fmt.Sprintf("%s %.0f%%", label, shown)
+		out = append(out, thresholdColor(shown)+text+reset)
 		plain = append(plain, text)
 	}
 	add("5h", fiveHour)
@@ -181,7 +225,7 @@ func rateSegment(fiveHour, sevenDay *RateWindow) *segment {
 	}
 	return &segment{
 		out:      strings.Join(out, " "),
-		width:    utf8.RuneCountInString(strings.Join(plain, " ")),
+		width:    displayWidth(strings.Join(plain, " ")),
 		priority: 3,
 	}
 }
@@ -195,8 +239,8 @@ func linesSegment(added, removed int) *segment {
 	plain := fmt.Sprintf("+%d -%d", added, removed)
 	return &segment{
 		out:      fmt.Sprintf("%s+%d%s %s-%d%s", green, added, reset, red, removed, reset),
-		width:    utf8.RuneCountInString(plain),
-		priority: 5,
+		width:    displayWidth(plain),
+		priority: 4,
 	}
 }
 

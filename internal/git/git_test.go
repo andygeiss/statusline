@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,22 @@ func TestBranch(t *testing.T) {
 		dir := repo(t, "??\n")
 		if got := Branch(dir); got != "" {
 			t.Errorf("Branch = %q, want empty", got)
+		}
+	})
+
+	t.Run("long non-hash HEAD content yields empty", func(t *testing.T) {
+		t.Parallel()
+		dir := repo(t, "this is not a commit hash at all!\n")
+		if got := Branch(dir); got != "" {
+			t.Errorf("Branch = %q, want empty", got)
+		}
+	})
+
+	t.Run("sha256 detached HEAD reports short hash", func(t *testing.T) {
+		t.Parallel()
+		dir := repo(t, strings.Repeat("0123456789abcdef", 4)+"\n")
+		if got := Branch(dir); got != "0123456" {
+			t.Errorf("Branch = %q, want 0123456", got)
 		}
 	})
 }

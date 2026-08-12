@@ -12,7 +12,7 @@ make uninstall  # removes the entry and the binary
 Restart Claude Code (or open a new session) and the line appears:
 
 ```
-~/workspace/statusline │ Fable │ ██░░░ 42% │ ⎇ main │ 5h 24% 7d 41% │ $0.12 │ +156 -23
+~/workspace/statusline │ Fable │ ██░░░ 42% │ ⎇ main │ 5h 24% 7d 41% │ +156 -23
 ```
 
 ## What the line shows
@@ -23,11 +23,12 @@ Left to right; a segment whose data is absent is skipped.
 |---|---|---|
 | Directory (`~`-abbreviated, long paths shortened) | `workspace.current_dir` | blue |
 | Model | `model.display_name` | magenta |
-| Context-window gauge + exact percentage | `context_window.used_percentage` | green → yellow (60%) → red (85%) |
+| Context-window gauge + rounded percentage | `context_window.used_percentage` | green → yellow (60%) → red (85%) |
 | Git branch, or short hash on a detached HEAD | read from `.git/HEAD` directly — no `git` subprocess, fast in any repo size | cyan |
 | Subscription rate limits (Pro/Max only) | `rate_limits` | per-window threshold colors |
-| Session cost | `cost.total_cost_usd` | green |
 | Lines added / removed | `cost.total_lines_*` | green / red |
+| Agent name (subagents only) | `agent.name` | dim |
+| Output style (only when not `default`) | `output_style.name` | dim |
 
 When the terminal is narrow (`COLUMNS`), the line drops its rightmost
 low-priority segments first; the context gauge drops last, and directory and
@@ -75,4 +76,11 @@ Built against the [engineering baseline](https://github.com/andygeiss/baseline)
   as the baseline repository's own Makefile.
 - **Private repository, so no `go install` line**: the module proxy cannot
   serve it. Install from a checkout with `make install`, or take a binary
-  from a GitHub release (built by `operations/cli-release.md`'s workflow).
+  from a GitHub release (built by `operations/cli-release.md`'s workflow),
+  copy it to `~/.claude/statusline` (Windows: `%USERPROFILE%\.claude\statusline.exe`),
+  and run `~/.claude/statusline install` — `install` refuses to register a
+  binary that is not in place.
+- **Dependency `golang.org/x/text`** (outside the baseline's approved list):
+  fitting the line to the terminal needs each rune's East-Asian-width class,
+  and hand-rolled codepoint ranges misclassify real characters. `x/text/width`
+  is the authoritative table, maintained by the Go team.

@@ -58,9 +58,19 @@ func headBranch(gitDir string) string {
 	if branch, ok := strings.CutPrefix(head, "ref: refs/heads/"); ok {
 		return branch
 	}
-	// Detached HEAD: the file holds a full commit hash.
-	if len(head) >= 7 {
+	// Detached HEAD: the file holds a full commit hash — 40 hex chars,
+	// 64 in SHA-256 repositories. Anything else is corruption, not a branch.
+	if (len(head) == 40 || len(head) == 64) && isHex(head) {
 		return head[:7]
 	}
 	return ""
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }

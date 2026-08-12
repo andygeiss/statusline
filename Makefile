@@ -36,16 +36,20 @@ build:
 clean:
 	rm -rf bin/ statusline
 
-# Build a release-shaped binary into ~/.claude and register it in
+# Where the binary lands. Honors the same env var as the binary's own
+# -claude-dir default, so both halves of install always agree on the dir.
+STATUSLINE_CLAUDE_DIR ?= $(HOME)/.claude
+
+# Build a release-shaped binary into the Claude dir and register it in
 # settings.json. The binary does the JSON editing — Make and shell cannot
 # edit JSON safely.
 install:
-	mkdir -p "$(HOME)/.claude"
-	CGO_ENABLED=0 go build -trimpath -o "$(HOME)/.claude/statusline" $(MAIN)
-	"$(HOME)/.claude/statusline" install
+	mkdir -p "$(STATUSLINE_CLAUDE_DIR)"
+	CGO_ENABLED=0 go build -trimpath -o "$(STATUSLINE_CLAUDE_DIR)/statusline" $(MAIN)
+	"$(STATUSLINE_CLAUDE_DIR)/statusline" install
 
 # go run, not the installed binary: uninstall must work even after the
 # binary is gone.
 uninstall:
 	go run $(MAIN) uninstall
-	rm -f "$(HOME)/.claude/statusline"
+	rm -f "$(STATUSLINE_CLAUDE_DIR)/statusline"

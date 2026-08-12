@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -15,14 +16,26 @@ func input(t *testing.T, raw string) Input {
 	return in
 }
 
-const fullPayload = `{
+// fullPayload builds the everything-populated payload with an OS-native
+// current_dir, so the tilde-abbreviation assertions hold on Windows too.
+func fullPayload(tb testing.TB) string {
+	tb.Helper()
+	dir, err := json.Marshal(filepath.FromSlash("/home/andy/workspace/statusline"))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return `{
 	"model": {"id": "claude-fable-5", "display_name": "Fable"},
-	"workspace": {"current_dir": "/home/andy/workspace/statusline"},
+	"workspace": {"current_dir": ` + string(dir) + `},
 	"output_style": {"name": "default"},
-	"cost": {"total_cost_usd": 0.1234, "total_lines_added": 156, "total_lines_removed": 23},
+	"cost": {"total_lines_added": 156, "total_lines_removed": 23},
 	"context_window": {"used_percentage": 42},
 	"rate_limits": {"five_hour": {"used_percentage": 23.5}, "seven_day": {"used_percentage": 91.2}}
 }`
+}
+
+// testHome is the OS-native form of the payload's home directory.
+func testHome() string { return filepath.FromSlash("/home/andy") }
 
 func TestLine(t *testing.T) {
 	t.Parallel()
@@ -35,9 +48,9 @@ func TestLine(t *testing.T) {
 	}{
 		{
 			"full payload shows every segment",
-			fullPayload,
-			Options{Branch: "main", Home: "/home/andy"},
-			[]string{"~/workspace/statusline", "Fable", "⎇ main", "██░░░ 42%", "$0.12", "+156", "-23", "5h 24%", "7d 91%"},
+			fullPayload(t),
+			Options{Branch: "main", Home: testHome()},
+			[]string{filepath.FromSlash("~/workspace/statusline"), "Fable", "⎇ main", "██░░░ 42%", "+156", "-23", "5h 24%", "7d 91%"},
 			nil,
 		},
 		{
@@ -55,11 +68,11 @@ func TestLine(t *testing.T) {
 			[]string{"%"},
 		},
 		{
-			"zero cost and untouched lines are skipped",
-			`{"model": {"display_name": "Fable"}, "cost": {"total_cost_usd": 0}}`,
+			"untouched lines are skipped",
+			`{"model": {"display_name": "Fable"}, "cost": {}}`,
 			Options{},
 			[]string{"Fable"},
-			[]string{"$", "+0"},
+			[]string{"+0", "-0"},
 		},
 		{
 			"no rate limits for API-key users",
@@ -110,13 +123,13 @@ func TestLine(t *testing.T) {
 
 func TestLine_NarrowTerminalDropsOptionalSegments(t *testing.T) {
 	t.Parallel()
-	in := input(t, fullPayload)
-	wide := Line(in, Options{Branch: "main", Home: "/home/andy", Width: 200})
-	narrow := Line(in, Options{Branch: "main", Home: "/home/andy", Width: 45})
+	in := input(t, fullPayload(t))
+	wide := Line(in, Options{Branch: "main", Home: testHome(), Width: 200})
+	narrow := Line(in, Options{Branch: "main", Home: testHome(), Width: 45})
 	if !strings.Contains(wide, "5h") {
 		t.Fatalf("wide line %q missing rate limits", wide)
 	}
-	for _, dropped := range []string{"5h", "$0.12", "+156"} {
+	for _, dropped := range []string{"5h", "+156"} {
 		if strings.Contains(narrow, dropped) {
 			t.Errorf("narrow line %q still contains %q", narrow, dropped)
 		}
@@ -126,6 +139,67 @@ func TestLine_NarrowTerminalDropsOptionalSegments(t *testing.T) {
 		if !strings.Contains(narrow, kept) {
 			t.Errorf("narrow line %q lost %q", narrow, kept)
 		}
+	}
+}
+
+// A CJK directory occupies two columns per rune. Counting runes instead
+// would judge this line as fitting (30 ≤ 35) and keep the agent segment;
+// counting columns (39 > 35) must drop it.
+func TestLine_WideRunesCountTwoColumns(t *testing.T) {
+	t.Parallel()
+	in := input(t, `{
+		"workspace": {"current_dir": "/日本語/プロジェクト"},
+		"model": {"display_name": "Fable"},
+		"agent": {"name": "reviewer"}
+	}`)
+	got := Line(in, Options{Width: 35})
+	if strings.Contains(got, "reviewer") {
+		t.Errorf("line %q kept the agent segment despite wide runes overflowing 35 columns", got)
+	}
+	if !strings.Contains(got, "日本語") {
+		t.Errorf("line %q lost the directory segment", got)
+	}
+}
+
+// Control characters in external names must not reach stdout: a newline
+// would break the one-line contract, an ESC would inject color across the
+// following segments.
+func TestLine_ControlCharactersAreNeutralized(t *testing.T) {
+	t.Parallel()
+	in := input(t, `{"model": {"display_name": "evil\u001b[31mRED\nname"}}`)
+	got := Line(in, Options{})
+	if strings.Contains(got, "\n") {
+		t.Errorf("line %q contains a newline", got)
+	}
+	if strings.Contains(got, red) {
+		t.Errorf("line %q contains injected ANSI red", got)
+	}
+	if !strings.Contains(got, "RED name") {
+		t.Errorf("line %q should keep the printable text with controls as spaces", got)
+	}
+}
+
+func TestDisplayWidth(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		s    string
+		want int
+	}{
+		{"ascii", "abc", 3},
+		{"cjk takes two columns per rune", "日本語", 6},
+		{"nfd combining mark takes no column", "U\u0308bungen", 7},
+		{"emoji takes two columns", "\U0001F680", 2},
+		{"ideographic half fill space is narrow", "〿", 1},
+		{"gauge blocks and separator are narrow", "█░ │ ⎇ …", 8},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := displayWidth(tt.s); got != tt.want {
+				t.Errorf("displayWidth(%q) = %d, want %d", tt.s, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -142,6 +216,10 @@ func TestLine_ContextGaugeThresholds(t *testing.T) {
 		{"high usage is red", 92, red, "████░ 92%"},
 		{"full window is red and full bar", 100, red, "█████ 100%"},
 		{"zero usage is empty bar", 0, green, "░░░░░ 0%"},
+		{"bar agrees with the rounded percentage", 99.6, red, "█████ 100%"},
+		{"barely used still shows one block", 0.4, green, "█░░░░ 0%"},
+		{"color agrees with the rounded percentage at the red band", 84.6, red, "████░ 85%"},
+		{"color agrees with the rounded percentage at the yellow band", 59.6, yellow, "███░░ 60%"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -174,8 +252,11 @@ func TestShortDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := shortDir(tt.dir, tt.home); got != tt.want {
-				t.Errorf("shortDir(%q, %q) = %q, want %q", tt.dir, tt.home, got, tt.want)
+			// The cases are written with slashes; shortDir works in the
+			// target OS's separator, so convert both sides.
+			got := shortDir(filepath.FromSlash(tt.dir), filepath.FromSlash(tt.home))
+			if want := filepath.FromSlash(tt.want); got != want {
+				t.Errorf("shortDir(%q, %q) = %q, want %q", tt.dir, tt.home, got, want)
 			}
 		})
 	}
@@ -184,7 +265,7 @@ func TestShortDir(t *testing.T) {
 // FuzzLine feeds arbitrary bytes through the JSON decode + render path:
 // whatever Claude Code sends, the statusline must never panic.
 func FuzzLine(f *testing.F) {
-	f.Add([]byte(fullPayload))
+	f.Add([]byte(fullPayload(f)))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`{"context_window": {"used_percentage": -5}}`))
 	f.Add([]byte(`{"context_window": {"used_percentage": 1e300}}`))
