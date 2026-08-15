@@ -28,6 +28,7 @@ func fullPayload(tb testing.TB) string {
 	"model": {"id": "claude-fable-5", "display_name": "Fable"},
 	"workspace": {"current_dir": ` + string(dir) + `},
 	"output_style": {"name": "default"},
+	"effort": {"level": "high"},
 	"cost": {"total_lines_added": 156, "total_lines_removed": 23},
 	"context_window": {"used_percentage": 42},
 	"rate_limits": {"five_hour": {"used_percentage": 23.5}, "seven_day": {"used_percentage": 91.2}}
@@ -50,7 +51,7 @@ func TestLine(t *testing.T) {
 			"full payload shows every segment",
 			fullPayload(t),
 			Options{Branch: "main", Home: testHome()},
-			[]string{filepath.FromSlash("~/workspace/statusline"), "Fable", "⎇ main", "██░░░ 42%", "+156", "-23", "5h 24%", "7d 91%"},
+			[]string{filepath.FromSlash("~/workspace/statusline"), "Fable", "high", "⎇ main", "██░░░ 42%", "+156", "-23", "5h 24%", "7d 91%"},
 			nil,
 		},
 		{
@@ -80,6 +81,13 @@ func TestLine(t *testing.T) {
 			Options{},
 			[]string{"Fable"},
 			[]string{"5h", "7d"},
+		},
+		{
+			"effort level appears next to the model",
+			`{"model": {"display_name": "Fable"}, "effort": {"level": "xhigh"}}`,
+			Options{},
+			[]string{"Fable", "xhigh"},
+			nil,
 		},
 		{
 			"agent and non-default output style appear",
@@ -139,6 +147,16 @@ func TestLine_NarrowTerminalDropsOptionalSegments(t *testing.T) {
 		if !strings.Contains(narrow, kept) {
 			t.Errorf("narrow line %q lost %q", narrow, kept)
 		}
+	}
+}
+
+// Models without a reasoning-effort parameter send no effort object; the
+// line must then carry no empty segment and no separator for it.
+func TestLine_EffortAbsentWhenModelHasNone(t *testing.T) {
+	t.Parallel()
+	got := Line(input(t, `{"model": {"display_name": "Fable"}, "effort": {}}`), Options{})
+	if strings.Contains(got, "│") {
+		t.Errorf("line %q has a separator, want the model segment alone", got)
 	}
 }
 

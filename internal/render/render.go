@@ -22,6 +22,11 @@ type Input struct {
 	Workspace struct {
 		CurrentDir string `json:"current_dir"`
 	} `json:"workspace"`
+	// Effort is absent when the current model has no reasoning-effort
+	// parameter, so an empty Level means "nothing to show", not "low".
+	Effort struct {
+		Level string `json:"level"`
+	} `json:"effort"`
 	OutputStyle struct {
 		Name string `json:"name"`
 	} `json:"output_style"`
@@ -132,6 +137,12 @@ func Line(in Input, opts Options) string {
 	}
 	if in.Model.DisplayName != "" {
 		segs = append(segs, seg(in.Model.DisplayName, magenta, 0))
+	}
+	// Effort follows the model in the same hue: it qualifies the model
+	// rather than standing on its own, and dim keeps "Fable │ high" from
+	// competing with the name it belongs to.
+	if in.Effort.Level != "" {
+		segs = append(segs, seg(in.Effort.Level, dim+magenta, 3))
 	}
 	if p := in.ContextWindow.UsedPercentage; p != nil {
 		segs = append(segs, contextSegment(*p))

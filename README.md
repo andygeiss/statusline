@@ -12,7 +12,7 @@ make uninstall  # removes the entry and the binary
 Restart Claude Code (or open a new session) and the line appears:
 
 ```
-~/workspace/statusline │ Fable │ ██░░░ 42% │ ⎇ main │ 5h 24% 7d 41% │ +156 -23
+~/workspace/statusline │ Fable │ high │ ██░░░ 42% │ ⎇ main │ 5h 24% 7d 41% │ +156 -23
 ```
 
 ## What the line shows
@@ -23,6 +23,7 @@ Left to right; a segment whose data is absent is skipped.
 |---|---|---|
 | Directory (`~`-abbreviated, long paths shortened) | `workspace.current_dir` | blue |
 | Model | `model.display_name` | magenta |
+| Reasoning effort (`low`…`max`; only when the model has the parameter) | `effort.level` | dim magenta |
 | Context-window gauge + rounded percentage | `context_window.used_percentage` | green → yellow (60%) → red (85%) |
 | Git branch, or short hash on a detached HEAD | read from `.git/HEAD` directly — no `git` subprocess, fast in any repo size | cyan |
 | Subscription rate limits (Pro/Max only) | `rate_limits` | per-window threshold colors |
