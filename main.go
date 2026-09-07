@@ -4,8 +4,10 @@
 package main
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -82,9 +84,13 @@ func runRender(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	// run by hand without a pipe), so it is the one place that must honor
 	// ctx: the first Ctrl-C/SIGTERM exits instead of being swallowed. The
 	// decode goroutine stops when the process exits right after.
+	//
+	// UnmarshalDecode, not UnmarshalRead: the decoder stops at the end of
+	// the first value, while UnmarshalRead would read on to EOF — which a
+	// caller that keeps the pipe open never sends.
 	var in render.Input
 	decoded := make(chan error, 1)
-	go func() { decoded <- json.NewDecoder(stdin).Decode(&in) }()
+	go func() { decoded <- json.UnmarshalDecode(jsontext.NewDecoder(stdin), &in) }()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -154,14 +160,7 @@ func runUninstall(args []string, stderr io.Writer) error {
 }
 
 func defaultClaudeDir() string {
-	return envOr("STATUSLINE_CLAUDE_DIR", filepath.Join(homeDir(), ".claude"))
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
+	return cmp.Or(os.Getenv("STATUSLINE_CLAUDE_DIR"), filepath.Join(homeDir(), ".claude"))
 }
 
 // homeDir returns "" on failure; callers treat that as "no ~ abbreviation".

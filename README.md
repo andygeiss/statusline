@@ -62,26 +62,43 @@ the entry only when it points at this binary and leaves anything else alone.
 ## Development
 
 ```sh
-make check    # every CI gate, in CI's order
+make check    # every gate, against the working tree — before every commit
+make ci       # the same gates, against the commit — before every push
 make test     # the inner loop
 ```
 
 Built against the [engineering baseline](https://github.com/andygeiss/baseline)
-(`project-types/cli-tool.md`). Deviations, per its rules:
+(`project-types/cli-tool.md`).
 
-- **ANSI colors on stdout** (waives the baseline's no-ANSI rule): the
-  consumer is Claude Code's terminal UI, which renders ANSI — here color *is*
-  the data contract, and stdout stays one parseable line.
-- **Makefile `install`/`uninstall` targets** (normally banned): repo tooling
-  that wires the tool into the current user's Claude Code, in the same spirit
-  as the baseline repository's own Makefile.
-- **Private repository, so no `go install` line**: the module proxy cannot
-  serve it. Install from a checkout with `make install`, or take a binary
-  from a GitHub release (built by `operations/cli-release.md`'s workflow),
-  copy it to `~/.claude/statusline` (Windows: `%USERPROFILE%\.claude\statusline.exe`),
-  and run `~/.claude/statusline install` — `install` refuses to register a
-  binary that is not in place.
-- **Dependency `golang.org/x/text`** (outside the baseline's approved list):
-  fitting the line to the terminal needs each rune's East-Asian-width class,
-  and hand-rolled codepoint ranges misclassify real characters. `x/text/width`
-  is the authoritative table, maintained by the Go team.
+## Baseline deviations
+
+Three waived rules and one justification. Everything else follows the baseline.
+
+- **No colors, spinners, or ANSI control sequences** (`patterns/go-cli.md`) —
+  waived 2026-08-12 by Andy. The consumer is Claude Code's terminal UI, which
+  renders ANSI, so here color *is* the data contract. Scoped to the render
+  mode's single line, which stays one parseable line on stdout; the `install`
+  and `uninstall` commands print plain text.
+- **No `install`/`deploy` targets in the Makefile** (`stack/makefile.md`
+  *What NOT to add*) — waived 2026-08-12 by Andy. Installing *is* this tool's
+  job, and the two halves — build the binary, register it — have to agree on
+  one directory. Scoped to `install` and `uninstall`, which shell out to the
+  binary for the `settings.json` edit and touch nothing outside
+  `$STATUSLINE_CLAUDE_DIR`.
+- **README shows the `go install` line** (`checklists/cli-tool.md`) — waived
+  2026-08-12 by Andy. The repository is private, so the module proxy cannot
+  serve it and the line would not work for anyone. Scoped to that one line:
+  the install path is `make install` from a checkout. A user without a Go
+  toolchain gets a binary built by hand at the tagged commit
+  (`operations/cli-release.md`), copied to `~/.claude/statusline` (Windows:
+  `%USERPROFILE%\.claude\statusline.exe`) and registered with
+  `~/.claude/statusline install` — which refuses a binary that is not in place.
+
+Conformance, not a waiver:
+
+- **Dependency `golang.org/x/text`** — outside the approved list in
+  `stack/go.md`, which asks for exactly this: a written justification in the
+  README. Fitting the line to the terminal needs each rune's East-Asian-width
+  class, and hand-rolled codepoint ranges misclassify real characters.
+  `x/text/width` is the authoritative table, maintained by the Go team. Used
+  in one function, `internal/render.isWide`.

@@ -6,16 +6,33 @@ package settings
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
+
+// rawNumbers keeps every JSON number's exact text through the read/write
+// round trip. Unmarshaling into an any lands a number in a float64, which
+// corrupts a 64-bit id in a setting we never look at; a raw value re-marshals
+// as the bytes it came from.
+var rawNumbers = json.WithUnmarshalers(json.UnmarshalFromFunc(
+	func(dec *jsontext.Decoder, val *any) error {
+		if dec.PeekKind() != '0' {
+			return errors.ErrUnsupported // every other kind decodes as usual
+		}
+		num, err := dec.ReadValue()
+		if err != nil {
+			return err
+		}
+		*val = num.Clone() // ReadValue's buffer is reused by the next read
+		return nil
+	}))
 
 // Command reports the value written to settings.json. Claude Code runs it
 // through a POSIX shell (Git Bash on Windows), so the default ~/.claude gets
@@ -134,7 +151,10 @@ func Uninstall(claudeDir string) (removed bool, err error) {
 }
 
 // read loads settings.json into a generic map so unknown keys survive the
-// round trip. A missing file is an empty configuration, not an error.
+// round trip. A missing file is an empty configuration, not an error;
+// anything the file cannot mean — trailing data after the top-level value,
+// a duplicate key, invalid UTF-8 — is an error rather than a rewrite that
+// silently drops half of it.
 func read(claudeDir string) (cfg map[string]any, path string, err error) {
 	path = filepath.Join(claudeDir, "settings.json")
 	data, err := os.ReadFile(path)
@@ -149,15 +169,8 @@ func read(claudeDir string) (cfg map[string]any, path string, err error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return map[string]any{}, path, nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber() // plain Unmarshal turns 64-bit IDs into float64 and corrupts them on re-marshal
-	if err := dec.Decode(&cfg); err != nil {
+	if err := json.Unmarshal(data, &cfg, rawNumbers); err != nil {
 		return nil, path, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	// Unlike Unmarshal, Decode stops at the end of the first value; content
-	// after it would be silently dropped by the rewrite. Refuse instead.
-	if err := dec.Decode(new(any)); err != io.EOF {
-		return nil, path, fmt.Errorf("parsing %s: data after the top-level value", path)
 	}
 	if cfg == nil { // a file holding literal "null" decodes to a nil map
 		cfg = map[string]any{}
@@ -170,7 +183,9 @@ func read(claudeDir string) (cfg map[string]any, path string, err error) {
 // would discard the old file's mode, so it is carried over explicitly — a
 // user who keeps settings.json at 0600 must not end up world-readable.
 func write(path string, cfg map[string]any) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	// Deterministic sorts the map: without it every rewrite would reshuffle
+	// the user's settings.json into a fresh random key order.
+	data, err := json.Marshal(cfg, json.Deterministic(true), jsontext.WithIndent("  "))
 	if err != nil {
 		return fmt.Errorf("encoding %s: %w", path, err)
 	}

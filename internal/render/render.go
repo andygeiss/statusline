@@ -14,7 +14,7 @@ import (
 
 // Input mirrors the statusline JSON contract
 // (https://code.claude.com/docs/en/statusline.md). Only the fields the line
-// shows are declared; unknown fields are ignored by encoding/json.
+// shows are declared; unknown fields are ignored by encoding/json/v2.
 type Input struct {
 	Model struct {
 		DisplayName string `json:"display_name"`

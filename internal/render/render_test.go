@@ -1,7 +1,7 @@
 package render
 
 import (
-	"encoding/json"
+	json "encoding/json/v2"
 	"path/filepath"
 	"strings"
 	"testing"
