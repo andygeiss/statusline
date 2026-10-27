@@ -2,12 +2,15 @@
 
 A status line for [Claude Code](https://code.claude.com/docs/en/statusline.md):
 one static Go binary that turns the JSON Claude Code pipes to it into one
-colored line. Built for my own `~/.claude`; anyone with Go and Make can use it.
+colored line. Built for my own `~/.claude`; anyone with Go can use it.
 
 ```sh
-make install    # builds ~/.claude/statusline and registers it in settings.json
-make uninstall  # removes the entry and the binary
+GOBIN="$HOME/.claude" go install github.com/andygeiss/statusline@latest
+~/.claude/statusline install    # registers it in ~/.claude/settings.json
 ```
+
+From a checkout, `make install` does both, and `make uninstall` removes the
+entry and the binary again.
 
 Restart Claude Code (or open a new session) and the line appears:
 
@@ -50,11 +53,22 @@ into `~/.claude/statusline`, then runs `statusline install`, which sets in
 }
 ```
 
+`statusline install` registers only a binary that already sits in
+`~/.claude`: one anywhere else would leave Claude Code with a command that
+breaks once the file moves. That is why the `go install` line sets `GOBIN` —
+it puts the binary where `make install` does.
+
 The binary edits the JSON itself — every other setting survives, the write is
 atomic (temp file + rename), and a corrupt file is an error, never data loss.
-If `settings.json` already has a *different* statusLine, install refuses;
-rerun with `go run . install -force` to replace it. `make uninstall` removes
-the entry only when it points at this binary and leaves anything else alone.
+If `settings.json` already has a *different* statusLine, install refuses, and
+`install -force` replaces it. `statusline uninstall` removes the entry
+only when it points at this binary and leaves anything else alone;
+`make uninstall` deletes the binary too.
+
+Without a Go toolchain, build the binary by hand at the tagged commit (the
+baseline's `operations/cli-release.md`), copy it to `~/.claude/statusline`
+(Windows: `%USERPROFILE%\.claude\statusline.exe`), and register it with
+`~/.claude/statusline install`.
 
 `-claude-dir` (env `STATUSLINE_CLAUDE_DIR`) targets another config dir; see
 `go run . -h`.
@@ -72,7 +86,7 @@ Built against the [engineering baseline](https://github.com/andygeiss/baseline)
 
 ## Baseline deviations
 
-Three waived rules and one justification. Everything else follows the baseline.
+Two waived rules and one justification. Everything else follows the baseline.
 
 - **No colors, spinners, or ANSI control sequences** (`patterns/go-cli.md`) —
   waived 2026-08-12 by Andy. The consumer is Claude Code's terminal UI, which
@@ -85,14 +99,6 @@ Three waived rules and one justification. Everything else follows the baseline.
   one directory. Scoped to `install` and `uninstall`, which shell out to the
   binary for the `settings.json` edit and touch nothing outside
   `$STATUSLINE_CLAUDE_DIR`.
-- **README shows the `go install` line** (`checklists/cli-tool.md`) — waived
-  2026-08-12 by Andy. The repository is private, so the module proxy cannot
-  serve it and the line would not work for anyone. Scoped to that one line:
-  the install path is `make install` from a checkout. A user without a Go
-  toolchain gets a binary built by hand at the tagged commit
-  (`operations/cli-release.md`), copied to `~/.claude/statusline` (Windows:
-  `%USERPROFILE%\.claude\statusline.exe`) and registered with
-  `~/.claude/statusline install` — which refuses a binary that is not in place.
 
 Conformance, not a waiver:
 
